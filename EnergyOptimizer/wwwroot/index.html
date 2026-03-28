@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Energy Optimizer</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Segoe UI', sans-serif; background: #0f1117; color: #e0e0e0; padding: 24px; }
+    h1 { font-size: 1.4rem; color: #58a6ff; margin-bottom: 20px; }
+    h2 { font-size: 1rem; color: #aaa; margin-bottom: 12px; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+    .card { background: #161b22; border: 1px solid #30363d; border-radius: 10px; padding: 20px; }
+    .slider-group { margin-bottom: 14px; }
+    .slider-group label { display: flex; justify-content: space-between; font-size: 0.85rem; margin-bottom: 4px; color: #8b949e; }
+    .slider-group label span { color: #58a6ff; font-weight: bold; }
+    input[type=range] { width: 100%; accent-color: #58a6ff; }
+    .wynik-box { border-radius: 8px; padding: 14px; margin-top: 8px; font-size: 0.9rem; line-height: 1.8; }
+    .ALARM_SOC            { background: #3d1a1a; border-left: 4px solid #f85149; }
+    .OPTYMALIZACJA_KOSZTOW { background: #1a2d1a; border-left: 4px solid #3fb950; }
+    .TANIA_SIEC           { background: #1a2240; border-left: 4px solid #58a6ff; }
+    .NORMALNY             { background: #1e2228; border-left: 4px solid #888; }
+    .metric { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }
+    .metric-item { background: #0d1117; border-radius: 6px; padding: 8px 12px; font-size: 0.82rem; }
+    .metric-item .val { font-size: 1.1rem; font-weight: bold; color: #58a6ff; }
+    .chart-wrap { position: relative; height: 220px; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; margin-left: 8px; background: #21262d; }
+  </style>
+</head>
+<body>
+  <h1>⚡ Energy Optimizer – Makieta algorytmu sterowania</h1>
+  <div class="grid">
+    <div>
+      <div class="card">
+        <h2>Parametry wejściowe</h2>
+        <div class="slider-group"><label>P1 – Dostępna pojemność magazynu [MWh] <span id="p1v">2.0</span></label><input type="range" id="p1" min="0" max="3" step="0.05" value="2"></div>
+        <div class="slider-group"><label>P2 – Aktualna moc odbiorów [MW] <span id="p2v">0.60</span></label><input type="range" id="p2" min="0" max="1" step="0.01" value="0.6"></div>
+        <div class="slider-group"><label>P3 – Prognozowana moc odbiorów [MW] <span id="p3v">0.70</span></label><input type="range" id="p3" min="0" max="1" step="0.01" value="0.7"></div>
+        <div class="slider-group"><label>P4 – Prognozowana cena EE [zł/MWh] <span id="p4v">800</span></label><input type="range" id="p4" min="300" max="1000" step="10" value="800"></div>
+        <div class="slider-group"><label>Godzina <span id="gv">12</span></label><input type="range" id="godz" min="1" max="24" step="1" value="12"></div>
+        <div id="wynik"></div>
+      </div>
+    </div>
+    <div>
+      <div class="card">
+        <h2>Symulacja cen TGE RDN – 24h</h2>
+        <div class="chart-wrap"><canvas id="chartCeny"></canvas></div>
+      </div>
+      <div class="card" style="margin-top:20px">
+        <h2>Prognoza bilansu energetycznego – 24h</h2>
+        <div class="chart-wrap"><canvas id="chartBilans"></canvas></div>
+      </div>
+    </div>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>
