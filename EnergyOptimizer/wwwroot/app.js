@@ -245,6 +245,7 @@ function renderLiveView() {
     ["Praca magazynu", `${formatters.number3.format(hour.batteryChargeMw - hour.batteryDischargeMw)} MW`, `Na magazyn: +${formatters.number3.format(hour.batteryChargeMw)} / -${formatters.number3.format(hour.batteryDischargeMw)} MW`],
     ["SOC", `${formatters.number3.format(hour.socMWh)} MWh`, `Na 1 magazyn: +${formatters.number3.format(hour.chargePerBatteryMw)} / -${formatters.number3.format(hour.dischargePerBatteryMw)} MW`],
     ["Import z sieci", `${formatters.number3.format(hour.gridImportMw)} MW`, hour.gridLimitHit ? "Praca przy limicie przylacza" : "Import miesci sie w limicie"],
+    ["Eksport do sieci", `${formatters.number3.format(hour.exportMw)} MW`, `Z PV: ${formatters.number3.format(hour.pvExportMw)} MW, z magazynu: ${formatters.number3.format(hour.batteryExportMw)} MW`],
     ["Wynik godziny", `<span class="${deltaClass}">${formatters.currency0.format(hour.deltaPln)}</span>`, `Koszt tej godziny: ${formatters.currency0.format(hour.optimizedCostPln)}`]
   ];
 
@@ -254,6 +255,8 @@ function renderLiveView() {
       <p class="live-card-value">${value}</p>
       <p class="live-card-note">${escapeHtml(note)}</p>
     </div>`).join("");
+
+  renderLiveInsights(hour);
 
   $("timeline").innerHTML = state.response.hours.map((item, index) => `
     <button
@@ -269,20 +272,97 @@ function renderLiveView() {
   updateLiveRowHighlight();
 }
 
+function renderLiveInsights(hour) {
+  const context = hour.decisionContext;
+  if (!context) {
+    $("liveInsights").innerHTML = "";
+    return;
+  }
+
+  const futureRows = context.futureSignals.length > 0
+    ? context.futureSignals.map(signal => `
+        <tr>
+          <td>${escapeHtml(signal.label)}</td>
+          <td>${formatters.number2.format(signal.effectiveBuyPricePlnPerMWh)}</td>
+          <td>${formatters.number3.format(signal.forecastLoadMw)}</td>
+          <td>${formatters.number3.format(signal.forecastPvMw)}</td>
+        </tr>`).join("")
+    : `
+        <tr>
+          <td colspan="4">Brak kolejnych godzin w horyzoncie doby.</td>
+        </tr>`;
+
+  $("liveInsights").innerHTML = `
+    <article class="live-insight panel">
+      <h3>Koszty i ceny</h3>
+      <div class="live-insight-grid">
+        <div><strong>Energia</strong><span>${formatters.number2.format(context.energyPricePlnPerMWh)} PLN/MWh</span></div>
+        <div><strong>Dystrybucja</strong><span>${formatters.number2.format(context.distributionFeePlnPerMWh)} PLN/MWh</span></div>
+        <div><strong>Zakup lacznie</strong><span>${formatters.number2.format(context.effectiveBuyPricePlnPerMWh)} PLN/MWh</span></div>
+        <div><strong>Sprzedaz</strong><span>${formatters.number2.format(context.sellPricePlnPerMWh)} PLN/MWh</span></div>
+        <div><strong>Peak przyszly</strong><span>${formatters.number2.format(context.futurePeakBuyPricePlnPerMWh)} PLN/MWh</span></div>
+        <div><strong>Peak przyszlej sprzedazy</strong><span>${formatters.number2.format(context.futurePeakSellPricePlnPerMWh)} PLN/MWh</span></div>
+        <div><strong>Najtansza przyszla</strong><span>${formatters.number2.format(context.futureLowestBuyPricePlnPerMWh)} PLN/MWh</span></div>
+        <div><strong>Spread sprzedaz-zakup</strong><span>${formatters.number2.format(context.sellVsFutureBuySpreadPlnPerMWh)} PLN/MWh</span></div>
+      </div>
+    </article>
+    <article class="live-insight panel">
+      <h3>Magazyn i plan</h3>
+      <div class="live-insight-grid">
+        <div><strong>SOC start</strong><span>${formatters.number3.format(context.startingSocMWh)} MWh</span></div>
+        <div><strong>Dostepny SOC</strong><span>${formatters.number3.format(context.availableSocMWh)} MWh</span></div>
+        <div><strong>Min. SOC</strong><span>${formatters.number3.format(context.minimumSocMWh)} MWh</span></div>
+        <div><strong>Wolna pojemnosc</strong><span>${formatters.number3.format(context.remainingCapacityMWh)} MWh</span></div>
+        <div><strong>Cel SOC</strong><span>${formatters.number3.format(context.targetSocMWh)} MWh</span></div>
+        <div><strong>Brak do celu</strong><span>${formatters.number3.format(context.energyNeededToTargetMWh)} MWh</span></div>
+        <div><strong>Czas do celu</strong><span>${formatters.number2.format(context.hoursToReachTarget)} h</span></div>
+        <div><strong>Max ladowanie</strong><span>${formatters.number3.format(context.maxChargePowerMw)} MW</span></div>
+        <div><strong>Max rozladowanie</strong><span>${formatters.number3.format(context.maxDischargePowerMw)} MW</span></div>
+        <div><strong>Pierwsza godzina krytyczna</strong><span>${escapeHtml(context.firstCriticalHourLabel)}</span></div>
+        <div><strong>Okna na ladowanie</strong><span>${context.chargeSlotsBeforeNeed}</span></div>
+        <div><strong>Sr. kolejne 3h</strong><span>${formatters.number2.format(context.averageNextThreeBuyPricePlnPerMWh)} PLN/MWh</span></div>
+        <div><strong>Rezerwa pod eksport</strong><span>${formatters.number3.format(context.exportReserveSocMWh)} MWh</span></div>
+        <div><strong>Energia do eksportu</strong><span>${formatters.number3.format(context.exportableEnergyMWh)} MWh</span></div>
+        <div><strong>Odbudowa po eksporcie</strong><span>${formatters.number2.format(context.hoursToRestoreExportableEnergy)} h</span></div>
+        <div><strong>Arbitraz</strong><span>${context.arbitrageOpportunity ? "tak" : "nie"} / odbudowa: ${context.canRestoreAfterExport ? "tak" : "nie"}</span></div>
+      </div>
+    </article>
+    <article class="live-insight panel">
+      <h3>Forecast kolejnych 3h</h3>
+      <p class="summary-note">Sredni pobor: ${formatters.number3.format(context.averageNextThreeLoadMw)} MW. Srednie PV: ${formatters.number3.format(context.averageNextThreePvMw)} MW.</p>
+      <div class="table-wrap">
+        <table class="mini-table">
+          <thead>
+            <tr>
+              <th>Godzina</th>
+              <th>Zakup</th>
+              <th>Pobor</th>
+              <th>PV</th>
+            </tr>
+          </thead>
+          <tbody>${futureRows}</tbody>
+        </table>
+      </div>
+    </article>`;
+}
+
 function renderImportChart(hours, gridLimitMw, peakGridImportMw) {
   const peakLoadMw = Math.max(...hours.map(hour => hour.forecastLoadMw), 0.01);
-  const chartMax = Math.max(gridLimitMw, peakGridImportMw, peakLoadMw, 0.01);
+  const peakExportMw = Math.max(...hours.map(hour => hour.exportMw), 0.01);
+  const chartMax = Math.max(gridLimitMw, peakGridImportMw, peakLoadMw, peakExportMw, 0.01);
 
   $("gridImportChart").innerHTML = `
     <div class="import-chart-meta">
       <p class="summary-note">Aktywna godzina jest wyrozniona. Klikniecie slupka zatrzymuje auto-przewijanie i ustawia wybrana godzine.</p>
-      <p class="summary-note">Limit przylacza: ${formatters.number2.format(gridLimitMw)} MW. Pik importu: ${formatters.number2.format(peakGridImportMw)} MW. Pik poboru: ${formatters.number2.format(peakLoadMw)} MW.</p>
+      <p class="summary-note">Limit przylacza: ${formatters.number2.format(gridLimitMw)} MW. Pik importu: ${formatters.number2.format(peakGridImportMw)} MW. Pik eksportu: ${formatters.number2.format(peakExportMw)} MW. Pik poboru: ${formatters.number2.format(peakLoadMw)} MW.</p>
     </div>
     <div class="import-chart-wrap">
       <div class="import-chart-grid">
         ${hours.map((hour, index) => {
           const importRatio = hour.gridImportMw / chartMax;
           const importHeight = hour.gridImportMw > 0 ? Math.max(6, importRatio * 100) : 0;
+          const exportRatio = hour.exportMw / chartMax;
+          const exportHeight = hour.exportMw > 0 ? Math.max(6, exportRatio * 100) : 0;
           const loadRatio = hour.forecastLoadMw / chartMax;
           const loadMarkerBottom = Math.max(0, Math.min(100, loadRatio * 100));
           const classes = [
@@ -297,11 +377,15 @@ function renderImportChart(hours, gridLimitMw, peakGridImportMw) {
               class="${classes}"
               data-hour-index="${index}"
               aria-pressed="${index === state.liveIndex}"
-              title="${escapeHtml(`${hour.label}: import ${formatters.number3.format(hour.gridImportMw)} MW, pobor ${formatters.number3.format(hour.forecastLoadMw)} MW`)}">
-              <span class="import-bar-value">${formatters.number2.format(hour.gridImportMw)}</span>
+              title="${escapeHtml(`${hour.label}: import ${formatters.number3.format(hour.gridImportMw)} MW, eksport ${formatters.number3.format(hour.exportMw)} MW, pobor ${formatters.number3.format(hour.forecastLoadMw)} MW`)}">
+              <span class="import-bar-values">
+                <span class="import-bar-value import-bar-value-import">I ${formatters.number2.format(hour.gridImportMw)}</span>
+                <span class="import-bar-value import-bar-value-export">E ${formatters.number2.format(hour.exportMw)}</span>
+              </span>
               <span class="import-bar-track">
                 <span class="import-bar-load-marker" style="bottom: calc(${loadMarkerBottom}% - 1px)"></span>
                 <span class="import-bar-fill" style="height: ${importHeight}%"></span>
+                <span class="export-bar-fill" style="height: ${exportHeight}%"></span>
               </span>
               <span class="import-bar-label">${escapeHtml(hour.label.slice(0, 2))}</span>
             </button>`;

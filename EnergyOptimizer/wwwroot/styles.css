@@ -267,6 +267,48 @@ body {
   margin-bottom: 14px;
 }
 
+.live-insights {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.live-insight {
+  padding: 14px;
+  border: 1px solid #d8e4f2;
+  border-radius: 10px;
+  background: #fbfdff;
+}
+
+.live-insight h3 {
+  margin: 0 0 12px;
+  font-size: 1rem;
+  color: var(--live);
+}
+
+.live-insight-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 12px;
+}
+
+.live-insight-grid div {
+  display: grid;
+  gap: 4px;
+}
+
+.live-insight-grid strong {
+  font-size: 0.82rem;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+
+.live-insight-grid span {
+  font-size: 0.95rem;
+  color: var(--text);
+}
+
 .live-card {
   padding: 14px;
   border: 1px solid #d8e4f2;
@@ -298,6 +340,15 @@ body {
   display: grid;
   grid-template-columns: repeat(24, minmax(48px, 1fr));
   gap: 8px;
+}
+
+.mini-table {
+  font-size: 0.84rem;
+}
+
+.mini-table th,
+.mini-table td {
+  padding: 8px 6px;
 }
 
 .timeline-item {
@@ -390,11 +441,23 @@ body {
   background: #f4f9ff;
 }
 
+.import-bar-values {
+  display: grid;
+  gap: 4px;
+}
+
 .import-bar-value {
-  font-size: 0.78rem;
+  font-size: 0.72rem;
   font-weight: 700;
-  color: var(--live);
   text-align: center;
+}
+
+.import-bar-value-import {
+  color: var(--live);
+}
+
+.import-bar-value-export {
+  color: #1f7a4d;
 }
 
 .import-bar-track {
@@ -420,11 +483,22 @@ body {
 }
 
 .import-bar-fill {
-  width: 74%;
+  position: absolute;
+  left: 13%;
+  width: 28%;
   min-height: 0;
   border-radius: 8px 8px 0 0;
   background: linear-gradient(180deg, #5ea2e8 0%, #1d5fa7 100%);
-  position: relative;
+  z-index: 1;
+}
+
+.export-bar-fill {
+  position: absolute;
+  right: 13%;
+  width: 28%;
+  min-height: 0;
+  border-radius: 8px 8px 0 0;
+  background: linear-gradient(180deg, #7bd495 0%, #1f7a4d 100%);
   z-index: 1;
 }
 
@@ -440,7 +514,11 @@ body {
 }
 
 .import-bar-active .import-bar-fill {
-  background: linear-gradient(180deg, #4fbe7e 0%, #1f7a4d 100%);
+  background: linear-gradient(180deg, #7bb6f0 0%, #154f8f 100%);
+}
+
+.import-bar-active .export-bar-fill {
+  background: linear-gradient(180deg, #64cf8b 0%, #14633d 100%);
 }
 
 .import-bar-warning .import-bar-fill {
@@ -549,6 +627,10 @@ body[data-loading="true"] .content {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
+  .live-insights {
+    grid-template-columns: 1fr;
+  }
+
   .timeline {
     grid-template-columns: repeat(12, minmax(56px, 1fr));
   }
@@ -597,7 +679,8 @@ body[data-loading="true"] .content {
 
   .summary-grid,
   .meta-grid,
-  .live-cards {
+  .live-cards,
+  .live-insights {
     grid-template-columns: 1fr;
   }
 

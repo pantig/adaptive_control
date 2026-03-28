@@ -273,6 +273,7 @@ public sealed class SimulationService(PolishCalendarService calendarService, Con
         IReadOnlyList<double> loadForecast,
         IReadOnlyList<double> pvForecast)
     {
+        const double Epsilon = 0.0001;
         var totalBatteryCapacity = scenario.BatteryCount * scenario.BatteryCapacityMWh;
         var minimumSoc = totalBatteryCapacity * (scenario.MinimumSocPercent / 100.0);
         var maxChargePower = scenario.BatteryCount * scenario.BatteryCapacityMWh * BatteryPowerPerCapacityRatio;
@@ -290,6 +291,20 @@ public sealed class SimulationService(PolishCalendarService calendarService, Con
             var pv = pvForecast[hour];
             var price = prices[hour];
             var startingSoc = soc;
+            var targetSoc = ComputeTargetSoc(hour, prices, netLoad, minimumSoc, totalBatteryCapacity, maxDischargePower);
+            var decisionContext = BuildDecisionContext(
+                hour,
+                prices,
+                loadForecast,
+                pvForecast,
+                startingSoc,
+                minimumSoc,
+                totalBatteryCapacity,
+                maxChargePower,
+                maxDischargePower,
+                targetSoc,
+                scenario.GridImportLimitMw,
+                scenario.DistributionFeePlnPerMWh);
 
             var baselineGrid = Math.Min(scenario.GridImportLimitMw, Math.Max(0, load - pv));
             var baselineExport = Math.Max(0, pv - load);
@@ -306,6 +321,8 @@ public sealed class SimulationService(PolishCalendarService calendarService, Con
             var unserved = 0.0;
             var pvCharge = 0.0;
             var gridCharge = 0.0;
+            var batteryExport = 0.0;
+            var pvExport = 0.0;
             var actions = new List<string>();
 
             if (load > pv)
@@ -320,7 +337,7 @@ public sealed class SimulationService(PolishCalendarService calendarService, Con
                     var availableDischarge = Math.Min(maxDischargePower, Math.Max(0, soc - minimumSoc));
                     discharge = Math.Min(Math.Max(0, desiredDischarge), availableDischarge);
 
-                    if (discharge > 0)
+                    if (discharge > Epsilon)
                     {
                         remainingLoad -= discharge;
                         soc -= discharge;
@@ -331,7 +348,7 @@ public sealed class SimulationService(PolishCalendarService calendarService, Con
                 gridImport = Math.Min(scenario.GridImportLimitMw, remainingLoad);
                 remainingLoad -= gridImport;
 
-                if (remainingLoad > 0)
+                if (remainingLoad > Epsilon)
                 {
                     unserved = remainingLoad;
                     actions.Add("przekroczony limit przyłącza");
@@ -342,22 +359,41 @@ public sealed class SimulationService(PolishCalendarService calendarService, Con
                 var surplusPv = pv - load;
                 pvCharge = Math.Min(Math.Min(maxChargePower, totalBatteryCapacity - soc), surplusPv);
                 charge = pvCharge;
-                if (pvCharge > 0)
+                if (pvCharge > Epsilon)
                 {
                     soc += pvCharge;
                     actions.Add("ładowanie z PV");
                 }
 
-                export = Math.Max(0, surplusPv - pvCharge);
-                if (export > 0)
+                pvExport = Math.Max(0, surplusPv - pvCharge);
+                export = pvExport;
+                if (pvExport > Epsilon)
                 {
                     actions.Add("oddanie nadwyżki do sieci");
                 }
             }
 
-            var targetSoc = ComputeTargetSoc(hour, prices, netLoad, minimumSoc, totalBatteryCapacity, maxDischargePower);
-            var batteryHasRoom = soc < totalBatteryCapacity - 0.0001;
-            var canGridCharge = price.CheapHour && batteryHasRoom && soc < targetSoc - 0.0001;
+            var exportFloorSoc = Math.Max(decisionContext.TargetSocMWh, decisionContext.ExportReserveSocMWh);
+            var availableExportEnergy = Math.Max(0, soc - exportFloorSoc);
+            var availableExportPower = Math.Max(0, maxDischargePower - discharge);
+            var profitableBatteryExport = charge < Epsilon
+                && gridImport < Epsilon
+                && unserved < Epsilon
+                && availableExportEnergy > Epsilon
+                && availableExportPower > Epsilon
+                && decisionContext.ArbitrageOpportunity;
+
+            if (profitableBatteryExport)
+            {
+                batteryExport = Math.Min(availableExportPower, availableExportEnergy);
+                discharge += batteryExport;
+                export += batteryExport;
+                soc -= batteryExport;
+                actions.Add("sprzedaz z magazynu do sieci");
+            }
+
+            var batteryHasRoom = soc < totalBatteryCapacity - Epsilon;
+            var canGridCharge = discharge < Epsilon && price.CheapHour && batteryHasRoom && soc < targetSoc - Epsilon;
             if (canGridCharge)
             {
                 var availableChargePower = Math.Max(0, maxChargePower - charge);
@@ -365,7 +401,7 @@ public sealed class SimulationService(PolishCalendarService calendarService, Con
                 var energyNeeded = Math.Max(0, targetSoc - soc);
                 var extraCharge = Math.Min(Math.Min(availableChargePower, gridHeadroom), Math.Min(totalBatteryCapacity - soc, energyNeeded));
 
-                if (extraCharge > 0)
+                if (extraCharge > Epsilon)
                 {
                     gridCharge = extraCharge;
                     charge += extraCharge;
@@ -381,17 +417,14 @@ public sealed class SimulationService(PolishCalendarService calendarService, Con
 
             var decisionReason = BuildDecisionReason(
                 price,
+                decisionContext,
                 load,
                 pv,
                 scenario.GridImportLimitMw,
-                totalBatteryCapacity,
-                minimumSoc,
-                startingSoc,
-                soc,
-                targetSoc,
                 pvCharge,
                 gridCharge,
                 discharge,
+                batteryExport,
                 export,
                 gridImport,
                 unserved);
@@ -413,15 +446,18 @@ public sealed class SimulationService(PolishCalendarService calendarService, Con
                 ChargePerBatteryMw: Math.Round(chargePerBattery, 3),
                 DischargePerBatteryMw: Math.Round(dischargePerBattery, 3),
                 ExportMw: Math.Round(export, 3),
+                BatteryExportMw: Math.Round(batteryExport, 3),
+                PvExportMw: Math.Round(pvExport, 3),
                 SocMWh: Math.Round(soc, 3),
                 BaselineCostPln: Math.Round(baselineCost, 2),
                 OptimizedCostPln: Math.Round(optimizedCost, 2),
                 DeltaPln: Math.Round(baselineCost - optimizedCost, 2),
                 Action: actions.Count > 0 ? string.Join(", ", actions.Distinct()) : "bez działania",
                 DecisionReason: decisionReason,
+                DecisionContext: decisionContext,
                 CheapHour: price.CheapHour,
                 ExpensiveHour: price.ExpensiveHour,
-                GridLimitHit: gridImport >= scenario.GridImportLimitMw - 0.0001 || unserved > 0,
+                GridLimitHit: gridImport >= scenario.GridImportLimitMw - Epsilon || unserved > 0,
                 UnservedMw: Math.Round(unserved, 3)));
         }
 
@@ -483,75 +519,224 @@ public sealed class SimulationService(PolishCalendarService calendarService, Con
 
     private static string BuildDecisionReason(
         PriceProfileHour price,
+        DecisionContext decisionContext,
         double load,
         double pv,
         double gridImportLimit,
-        double totalBatteryCapacity,
-        double minimumSoc,
-        double startingSoc,
-        double endingSoc,
-        double targetSoc,
         double pvCharge,
         double gridCharge,
         double discharge,
+        double batteryExport,
         double export,
         double gridImport,
         double unserved)
     {
         const double Epsilon = 0.0001;
         var netDemand = Math.Max(0, load - pv);
+        var futureSummary = decisionContext.FutureSignals.Count > 0
+            ? string.Join(", ", decisionContext.FutureSignals.Select(signal => $"{signal.Label}: {signal.EffectiveBuyPricePlnPerMWh:0} PLN/MWh"))
+            : "brak kolejnych godzin";
 
         if (unserved > Epsilon)
         {
-            return "Po wykorzystaniu PV, magazynu i limitu przylacza nadal brakuje mocy, wiec czesc zapotrzebowania pozostaje niepokryta.";
-        }
-
-        if (discharge > Epsilon && price.ExpensiveHour)
-        {
-            return "To droga godzina, dlatego system korzysta z energii w magazynie, aby ograniczyc zakup z sieci.";
-        }
-
-        if (discharge > Epsilon)
-        {
-            return "Zuzycie po PV zbliza sie do limitu przylacza, dlatego magazyn scina import z sieci.";
+            return $"Forecast poboru {load:0.000} MW i PV {pv:0.000} MW daje {netDemand:0.000} MW zapotrzebowania przy limicie {gridImportLimit:0.000} MW. Dostepny SOC ponad minimum to {decisionContext.AvailableSocMWh:0.000} MWh, ale nadal brakuje mocy.";
         }
 
         if (gridCharge > Epsilon)
         {
-            return "To tania godzina, a magazyn trzeba przygotowac na drozszy okres, dlatego system doladowuje go z sieci.";
+            return $"Zakup teraz kosztuje {decisionContext.EffectiveBuyPricePlnPerMWh:0} PLN/MWh (energia {decisionContext.EnergyPricePlnPerMWh:0} + dystrybucja {decisionContext.DistributionFeePlnPerMWh:0}). Przyszle ceny dochodza do {decisionContext.FuturePeakBuyPricePlnPerMWh:0} PLN/MWh [{futureSummary}], a do celu SOC {decisionContext.TargetSocMWh:0.000} MWh brakuje {decisionContext.EnergyNeededToTargetMWh:0.000} MWh, czyli ok. {decisionContext.HoursToReachTarget:0.0} h ladowania.";
+        }
+
+        if (batteryExport > Epsilon)
+        {
+            if (decisionContext.FutureSignals.Count == 0)
+            {
+                return $"To koniec horyzontu doby, wiec system sprzedaje {batteryExport:0.000} MW z magazynu. Po zachowaniu rezerwy {decisionContext.ExportReserveSocMWh:0.000} MWh zostaje {decisionContext.ExportableEnergyMWh:0.000} MWh energii, ktora warto zmonetyzowac po {decisionContext.SellPricePlnPerMWh:0} PLN/MWh.";
+            }
+
+            return $"Cena sprzedazy {decisionContext.SellPricePlnPerMWh:0} PLN/MWh jest wyzsza od najtanszego przyszlego zakupu {decisionContext.FutureLowestBuyPricePlnPerMWh:0} PLN/MWh o {decisionContext.SellVsFutureBuySpreadPlnPerMWh:0} PLN/MWh. Magazyn ma {decisionContext.ExportableEnergyMWh:0.000} MWh ponad rezerwe {decisionContext.ExportReserveSocMWh:0.000} MWh i odtworzy ten zapas w ok. {decisionContext.HoursToRestoreExportableEnergy:0.0} h, dlatego system eksportuje energie do sieci.";
+        }
+
+        if (discharge > Epsilon && netDemand > gridImportLimit)
+        {
+            return $"Forecast poboru {load:0.000} MW i PV {pv:0.000} MW przekracza limit przylacza {gridImportLimit:0.000} MW. System wykorzystuje dostepny SOC {decisionContext.AvailableSocMWh:0.000} MWh, aby ograniczyc import z sieci.";
+        }
+
+        if (discharge > Epsilon)
+        {
+            return $"To droga godzina: zakup kosztuje {decisionContext.EffectiveBuyPricePlnPerMWh:0} PLN/MWh, a w kolejnych godzinach ceny wygladaja tak: [{futureSummary}]. Magazyn ma dostepne {decisionContext.AvailableSocMWh:0.000} MWh ponad minimum, dlatego system korzysta z niego zamiast kupowac energie z sieci.";
         }
 
         if (pvCharge > Epsilon && export > Epsilon)
         {
-            return "PV daje nadwyzke. Magazyn laduje sie do bezpiecznego poziomu, a reszta energii trafia do sieci.";
+            return $"PV pokrywa obiekt i daje nadwyzke. Magazyn ma jeszcze {decisionContext.RemainingCapacityMWh:0.000} MWh wolnego miejsca, dlatego laduje sie z PV, a reszta energii trafia do sieci po {decisionContext.SellPricePlnPerMWh:0} PLN/MWh.";
         }
 
         if (pvCharge > Epsilon)
         {
-            return "PV pokrywa obiekt i zostawia nadwyzke, dlatego system laduje magazyn zamiast kupowac energie z sieci.";
+            return $"PV pokrywa obiekt i zostawia nadwyzke, dlatego system laduje magazyn. Docelowy poziom SOC to {decisionContext.TargetSocMWh:0.000} MWh, a przyszle ceny dochodza do {decisionContext.FuturePeakBuyPricePlnPerMWh:0} PLN/MWh.";
         }
 
         if (export > Epsilon)
         {
-            return "PV przekracza chwilowe zuzycie, a magazyn jest juz pelny lub ma wystarczajacy zapas, wiec nadwyzka trafia do sieci.";
+            return $"PV przekracza chwilowe zuzycie, a magazyn ma juz wystarczajacy zapas lub za malo wolnego miejsca ({decisionContext.RemainingCapacityMWh:0.000} MWh), wiec nadwyzka trafia do sieci.";
         }
 
-        if (netDemand > Epsilon && startingSoc <= minimumSoc + Epsilon)
+        if (netDemand > Epsilon && decisionContext.AvailableSocMWh <= Epsilon)
         {
-            return "Magazyn jest przy minimalnym SOC, dlatego system zostawia rezerwe i pokrywa zapotrzebowanie z sieci.";
+            return $"Magazyn jest przy minimalnym SOC {decisionContext.MinimumSocMWh:0.000} MWh, dlatego system zostawia rezerwe i pokrywa zapotrzebowanie z sieci.";
         }
 
-        if (netDemand > Epsilon && price.CheapHour && endingSoc >= Math.Min(totalBatteryCapacity, targetSoc) - Epsilon)
+        if (netDemand > Epsilon && price.CheapHour && decisionContext.EnergyNeededToTargetMWh <= Epsilon)
         {
-            return "To tania godzina, ale magazyn ma juz zapas potrzebny na kolejne godziny, wiec dodatkowe ladowanie nie jest potrzebne.";
+            return $"To tania godzina, ale docelowy poziom SOC {decisionContext.TargetSocMWh:0.000} MWh jest juz osiagniety. Kolejne ceny to [{futureSummary}], wiec dodatkowe ladowanie nie jest potrzebne.";
         }
 
         if (netDemand > Epsilon && gridImport >= Math.Min(netDemand, gridImportLimit) - Epsilon)
         {
-            return "Po uwzglednieniu PV zakup z sieci jest tutaj wystarczajacy, bo ta godzina nie wymaga dodatkowej pracy magazynu.";
+            return $"Po uwzglednieniu PV zakup z sieci jest tutaj wystarczajacy. Zakup kosztuje {decisionContext.EffectiveBuyPricePlnPerMWh:0} PLN/MWh, a magazyn zachowuje rezerwe {decisionContext.TargetSocMWh:0.000} MWh na kolejne godziny.";
         }
 
-        return "Bilans energii jest stabilny, dlatego system utrzymuje biezacy stan bez dodatkowej reakcji.";
+        return $"Bilans energii jest stabilny. Zakup kosztuje {decisionContext.EffectiveBuyPricePlnPerMWh:0} PLN/MWh, przyszly szczyt to {decisionContext.FuturePeakBuyPricePlnPerMWh:0} PLN/MWh, a kolejne ceny to [{futureSummary}], dlatego system utrzymuje biezacy stan.";
+    }
+
+    private static DecisionContext BuildDecisionContext(
+        int currentHour,
+        IReadOnlyList<PriceProfileHour> prices,
+        IReadOnlyList<double> loadForecast,
+        IReadOnlyList<double> pvForecast,
+        double startingSoc,
+        double minimumSoc,
+        double totalBatteryCapacity,
+        double maxChargePower,
+        double maxDischargePower,
+        double targetSoc,
+        double gridImportLimit,
+        double distributionFeePlnPerMWh)
+    {
+        var currentPrice = prices[currentHour];
+        var futureHours = Enumerable.Range(currentHour + 1, Math.Max(0, PeriodCount - currentHour - 1)).ToArray();
+        var futureSignals = futureHours
+            .Take(3)
+            .Select(hour =>
+            {
+                var netDemand = Math.Max(0, loadForecast[hour] - pvForecast[hour]);
+                return new FutureSignal(
+                    Hour: hour,
+                    Label: prices[hour].Label,
+                    EffectiveBuyPricePlnPerMWh: Math.Round(prices[hour].EffectiveBuyPricePlnPerMWh, 2),
+                    ForecastLoadMw: Math.Round(loadForecast[hour], 3),
+                    ForecastPvMw: Math.Round(pvForecast[hour], 3),
+                    NetDemandMw: Math.Round(netDemand, 3),
+                    CheapHour: prices[hour].CheapHour,
+                    ExpensiveHour: prices[hour].ExpensiveHour);
+            })
+            .ToList();
+
+        var futurePeakBuy = futureHours.Length > 0
+            ? futureHours.Max(hour => prices[hour].EffectiveBuyPricePlnPerMWh)
+            : currentPrice.EffectiveBuyPricePlnPerMWh;
+
+        var futurePeakSell = futureHours.Length > 0
+            ? futureHours.Max(hour => prices[hour].SellPricePlnPerMWh)
+            : currentPrice.SellPricePlnPerMWh;
+
+        var futureLowestBuy = futureHours.Length > 0
+            ? futureHours.Min(hour => prices[hour].EffectiveBuyPricePlnPerMWh)
+            : currentPrice.EffectiveBuyPricePlnPerMWh;
+
+        var averageNextThreeBuy = futureSignals.Count > 0
+            ? futureSignals.Average(signal => signal.EffectiveBuyPricePlnPerMWh)
+            : currentPrice.EffectiveBuyPricePlnPerMWh;
+
+        var averageNextThreeLoad = futureSignals.Count > 0
+            ? futureSignals.Average(signal => signal.ForecastLoadMw)
+            : loadForecast[currentHour];
+
+        var averageNextThreePv = futureSignals.Count > 0
+            ? futureSignals.Average(signal => signal.ForecastPvMw)
+            : pvForecast[currentHour];
+
+        var currentBuy = currentPrice.EffectiveBuyPricePlnPerMWh;
+        var spreadThreshold = Math.Max(35, currentBuy * 0.08);
+        int? firstCriticalHour = null;
+
+        foreach (var hour in futureHours)
+        {
+            var netDemand = Math.Max(0, loadForecast[hour] - pvForecast[hour]);
+            var chargeHeadroom = Math.Max(0, gridImportLimit - netDemand);
+            if (netDemand > 0.0001 &&
+                (prices[hour].EffectiveBuyPricePlnPerMWh >= currentBuy + spreadThreshold ||
+                 netDemand > maxDischargePower ||
+                 chargeHeadroom < maxChargePower * 0.35))
+            {
+                firstCriticalHour = hour;
+                break;
+            }
+        }
+
+        var lastChargeHour = firstCriticalHour is null ? PeriodCount - 1 : firstCriticalHour.Value - 1;
+        var chargeSlotsBeforeNeed = lastChargeHour > currentHour
+            ? Enumerable.Range(currentHour + 1, lastChargeHour - currentHour)
+                .Count(hour =>
+                {
+                    var netDemand = Math.Max(0, loadForecast[hour] - pvForecast[hour]);
+                    return Math.Max(0, gridImportLimit - netDemand) >= Math.Max(0.05, maxChargePower * 0.35);
+                })
+            : 0;
+
+        var energyNeededToTarget = Math.Max(0, targetSoc - startingSoc);
+        var hoursToReachTarget = maxChargePower > 0.0001 ? energyNeededToTarget / maxChargePower : 0;
+        var exportReserveSoc = ComputeExportReserveSoc(
+            currentHour,
+            prices,
+            loadForecast,
+            pvForecast,
+            minimumSoc,
+            totalBatteryCapacity,
+            maxDischargePower,
+            gridImportLimit);
+        var exportFloorSoc = Math.Max(targetSoc, exportReserveSoc);
+        var exportableEnergy = Math.Max(0, startingSoc - exportFloorSoc);
+        var sellVsFutureBuySpread = futureHours.Length > 0
+            ? currentPrice.SellPricePlnPerMWh - futureLowestBuy
+            : currentPrice.SellPricePlnPerMWh;
+        var hoursToRestoreExportableEnergy = maxChargePower > 0.0001 ? exportableEnergy / maxChargePower : 0;
+        var canRestoreAfterExport = firstCriticalHour is null
+            || chargeSlotsBeforeNeed >= (int)Math.Ceiling(hoursToRestoreExportableEnergy - 0.0001);
+        var arbitrageOpportunity = exportableEnergy > 0.0001
+            && (futureHours.Length == 0 || sellVsFutureBuySpread >= 20)
+            && canRestoreAfterExport;
+
+        return new DecisionContext(
+            StartingSocMWh: Math.Round(startingSoc, 3),
+            AvailableSocMWh: Math.Round(Math.Max(0, startingSoc - minimumSoc), 3),
+            MinimumSocMWh: Math.Round(minimumSoc, 3),
+            RemainingCapacityMWh: Math.Round(Math.Max(0, totalBatteryCapacity - startingSoc), 3),
+            MaxChargePowerMw: Math.Round(maxChargePower, 3),
+            MaxDischargePowerMw: Math.Round(maxDischargePower, 3),
+            TargetSocMWh: Math.Round(targetSoc, 3),
+            EnergyNeededToTargetMWh: Math.Round(energyNeededToTarget, 3),
+            HoursToReachTarget: Math.Round(hoursToReachTarget, 2),
+            EnergyPricePlnPerMWh: Math.Round(currentPrice.RdnPricePlnPerMWh, 2),
+            DistributionFeePlnPerMWh: Math.Round(distributionFeePlnPerMWh, 2),
+            EffectiveBuyPricePlnPerMWh: Math.Round(currentPrice.EffectiveBuyPricePlnPerMWh, 2),
+            SellPricePlnPerMWh: Math.Round(currentPrice.SellPricePlnPerMWh, 2),
+            FuturePeakBuyPricePlnPerMWh: Math.Round(futurePeakBuy, 2),
+            FuturePeakSellPricePlnPerMWh: Math.Round(futurePeakSell, 2),
+            FutureLowestBuyPricePlnPerMWh: Math.Round(futureLowestBuy, 2),
+            AverageNextThreeBuyPricePlnPerMWh: Math.Round(averageNextThreeBuy, 2),
+            AverageNextThreeLoadMw: Math.Round(averageNextThreeLoad, 3),
+            AverageNextThreePvMw: Math.Round(averageNextThreePv, 3),
+            ChargeSlotsBeforeNeed: chargeSlotsBeforeNeed,
+            FirstCriticalHourLabel: firstCriticalHour is null ? "brak" : prices[firstCriticalHour.Value].Label,
+            ExportReserveSocMWh: Math.Round(exportReserveSoc, 3),
+            ExportableEnergyMWh: Math.Round(exportableEnergy, 3),
+            SellVsFutureBuySpreadPlnPerMWh: Math.Round(sellVsFutureBuySpread, 2),
+            HoursToRestoreExportableEnergy: Math.Round(hoursToRestoreExportableEnergy, 2),
+            ArbitrageOpportunity: arbitrageOpportunity,
+            CanRestoreAfterExport: canRestoreAfterExport,
+            FutureSignals: futureSignals);
     }
 
     private static double ComputeTargetSoc(
@@ -562,14 +747,47 @@ public sealed class SimulationService(PolishCalendarService calendarService, Con
         double totalBatteryCapacity,
         double maxDischargePower)
     {
+        var currentBuy = prices[currentHour].EffectiveBuyPricePlnPerMWh;
+        var spreadThreshold = Math.Max(35, currentBuy * 0.08);
         var futureReserve = Enumerable.Range(currentHour + 1, Math.Max(0, PeriodCount - currentHour - 1))
-            .Take(6)
-            .Where(hour => prices[hour].ExpensiveHour || netLoad[hour] > maxDischargePower)
+            .Take(8)
+            .Where(hour =>
+                (prices[hour].EffectiveBuyPricePlnPerMWh >= currentBuy + spreadThreshold || prices[hour].ExpensiveHour) &&
+                netLoad[hour] > 0.0001)
             .Select(hour => Math.Min(maxDischargePower, netLoad[hour]))
-            .Take(3)
+            .Take(4)
             .Sum();
 
-        return Math.Min(totalBatteryCapacity, minimumSoc + (futureReserve * 0.75));
+        return Math.Min(totalBatteryCapacity, minimumSoc + (futureReserve * 0.85));
+    }
+
+    private static double ComputeExportReserveSoc(
+        int currentHour,
+        IReadOnlyList<PriceProfileHour> prices,
+        IReadOnlyList<double> loadForecast,
+        IReadOnlyList<double> pvForecast,
+        double minimumSoc,
+        double totalBatteryCapacity,
+        double maxDischargePower,
+        double gridImportLimit)
+    {
+        var reserve = 0.0;
+        var consideredHours = 0;
+
+        for (var hour = currentHour + 1; hour < PeriodCount && consideredHours < 4; hour++)
+        {
+            var netDemand = Math.Max(0, loadForecast[hour] - pvForecast[hour]);
+            reserve += Math.Min(maxDischargePower, netDemand);
+            consideredHours++;
+
+            var chargeHeadroom = Math.Max(0, gridImportLimit - netDemand);
+            if (prices[hour].CheapHour && chargeHeadroom >= Math.Max(0.05, maxDischargePower * 0.60))
+            {
+                break;
+            }
+        }
+
+        return Math.Min(totalBatteryCapacity, minimumSoc + (reserve * 0.85));
     }
 
     private static double Percentile(IReadOnlyList<double> source, double percentile)

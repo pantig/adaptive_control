@@ -7,14 +7,14 @@ info: Microsoft.Hosting.Lifetime[0]
 info: Microsoft.Hosting.Lifetime[0]
       Content root path: C:\Users\oksiezycki\Apps\adaptive control\adaptive_control\EnergyOptimizer
 info: Microsoft.AspNetCore.Hosting.Diagnostics[1]
-      Request starting HTTP/1.1 GET http://localhost:5000/api/demo/defaults - - -
+      Request starting HTTP/1.1 POST http://localhost:5000/api/demo/simulate - application/json 350
 info: Microsoft.AspNetCore.Routing.EndpointMiddleware[0]
-      Executing endpoint 'HTTP: GET /api/demo/defaults'
+      Executing endpoint 'HTTP: POST /api/demo/simulate'
 info: Microsoft.AspNetCore.Http.Result.OkObjectResult[1]
       Setting HTTP status code 200.
 info: Microsoft.AspNetCore.Http.Result.OkObjectResult[3]
       Writing value of type 'SimulationResponse' as Json.
 info: Microsoft.AspNetCore.Routing.EndpointMiddleware[1]
-      Executed endpoint 'HTTP: GET /api/demo/defaults'
+      Executed endpoint 'HTTP: POST /api/demo/simulate'
 info: Microsoft.AspNetCore.Hosting.Diagnostics[2]
-      Request finished HTTP/1.1 GET http://localhost:5000/api/demo/defaults - 200 - application/json;+charset=utf-8 1312.3499ms
+      Request finished HTTP/1.1 POST http://localhost:5000/api/demo/simulate - 200 - application/json;+charset=utf-8 1477.8661ms
