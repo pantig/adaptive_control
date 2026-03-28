@@ -67,6 +67,7 @@ public sealed record SimulationHour(
     double OptimizedCostPln,
     double DeltaPln,
     string Action,
+    string DecisionReason,
     bool CheapHour,
     bool ExpensiveHour,
     bool GridLimitHit,

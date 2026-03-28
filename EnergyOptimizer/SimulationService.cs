@@ -1,6 +1,6 @@
 namespace EnergyOptimizer;
 
-public sealed class SimulationService(PolishCalendarService calendarService)
+public sealed class SimulationService(PolishCalendarService calendarService, ConsumptionProfileService consumptionProfileService)
 {
     private const int PeriodCount = 24;
     private const double BatteryPowerPerCapacityRatio = 0.25;
@@ -44,7 +44,9 @@ public sealed class SimulationService(PolishCalendarService calendarService)
     public SimulationResponse BuildDefaultScenario()
     {
         var tomorrow = DateOnly.FromDateTime(DateTime.Today.AddDays(1));
-        var request = new ScenarioRequest(ScenarioDate: tomorrow);
+        var request = new ScenarioRequest(
+            ScenarioDate: tomorrow,
+            CurrentLoadMw: consumptionProfileService.GetSuggestedCurrentLoadMw(tomorrow));
         return Simulate(request);
     }
 
@@ -53,7 +55,10 @@ public sealed class SimulationService(PolishCalendarService calendarService)
         var scenario = Normalize(request);
         var calendar = calendarService.Describe(scenario.ScenarioDate!.Value);
         var prices = BuildPriceProfile(scenario, calendar);
-        var historyProfiles = BuildHistoryProfiles(scenario);
+        var profileScenario = consumptionProfileService.BuildScenario(scenario.ScenarioDate.Value, scenario.CurrentLoadMw);
+        var historyProfiles = profileScenario is null
+            ? BuildHistoryProfiles(scenario)
+            : BuildHistoryProfiles(profileScenario);
         var history = historyProfiles
             .Select(day => new HistoricalDay(
                 day.Date,
@@ -62,7 +67,9 @@ public sealed class SimulationService(PolishCalendarService calendarService)
                 Math.Round(day.HourlyLoadMw.Max(), 3)))
             .ToList();
 
-        var loadForecast = BuildLoadForecast(scenario, calendar, historyProfiles);
+        var loadForecast = profileScenario is null
+            ? BuildLoadForecast(scenario, calendar, historyProfiles)
+            : profileScenario.ForecastLoadMw.Select(value => Math.Round(value, 3)).ToArray();
         var pvForecast = BuildPvForecast(scenario);
         var hours = BuildSimulationHours(scenario, prices, loadForecast, pvForecast);
 
@@ -75,11 +82,21 @@ public sealed class SimulationService(PolishCalendarService calendarService)
             AverageEffectiveBuyPricePlnPerMWh: Math.Round(prices.Average(price => price.EffectiveBuyPricePlnPerMWh), 2),
             AverageSellPricePlnPerMWh: Math.Round(prices.Average(price => price.SellPricePlnPerMWh), 2),
             PriceSource: "Profil demonstracyjny RDN 1h",
-            HistorySource: "Syntetyczne dane z ostatnich 7 dni");
+            HistorySource: profileScenario is null
+                ? "Syntetyczne dane z ostatnich 7 dni"
+                : $"Raporty XLSX: {profileScenario.SourceDescription}. Dzien referencyjny: {profileScenario.SourceDate:yyyy-MM-dd}. Skala profilu: {profileScenario.ScaleFactor:0.###}x");
 
         var summary = BuildSummary(hours);
 
-        return new SimulationResponse(scenario, calendar, inputs, history, hours, summary, Rules, Assumptions);
+        return new SimulationResponse(
+            scenario,
+            calendar,
+            inputs,
+            history,
+            hours,
+            summary,
+            Rules,
+            BuildAssumptions(profileScenario is not null));
     }
 
     private static ScenarioRequest Normalize(ScenarioRequest request)
@@ -95,7 +112,7 @@ public sealed class SimulationService(PolishCalendarService calendarService)
         return request with
         {
             ScenarioDate = scenarioDate,
-            CurrentLoadMw = Math.Clamp(request.CurrentLoadMw, 0.10, 2.00),
+            CurrentLoadMw = Math.Clamp(request.CurrentLoadMw, 0.01, 2.00),
             InitialStoredEnergyMWh = Math.Round(initialStoredEnergyMWh, 3),
             BatteryCount = batteryCount,
             BatteryCapacityMWh = batteryCapacityMWh,
@@ -173,6 +190,21 @@ public sealed class SimulationService(PolishCalendarService calendarService)
         }
 
         return history;
+    }
+
+    private List<HistoryProfile> BuildHistoryProfiles(ProfileScenario profileScenario)
+    {
+        return profileScenario.HistoryDays
+            .Select(day =>
+            {
+                var calendar = calendarService.Describe(day.Date);
+                var dayType = calendar.IsNonWorkingDay ? "Dzien wolny" : "Dzien roboczy";
+                return new HistoryProfile(
+                    day.Date,
+                    dayType,
+                    day.HourlyLoadMw.Select(value => Math.Round(value, 3)).ToArray());
+            })
+            .ToList();
     }
 
     private static double[] BuildLoadForecast(
@@ -257,6 +289,7 @@ public sealed class SimulationService(PolishCalendarService calendarService)
             var load = loadForecast[hour];
             var pv = pvForecast[hour];
             var price = prices[hour];
+            var startingSoc = soc;
 
             var baselineGrid = Math.Min(scenario.GridImportLimitMw, Math.Max(0, load - pv));
             var baselineExport = Math.Max(0, pv - load);
@@ -271,6 +304,8 @@ public sealed class SimulationService(PolishCalendarService calendarService)
             var gridImport = 0.0;
             var export = 0.0;
             var unserved = 0.0;
+            var pvCharge = 0.0;
+            var gridCharge = 0.0;
             var actions = new List<string>();
 
             if (load > pv)
@@ -305,14 +340,15 @@ public sealed class SimulationService(PolishCalendarService calendarService)
             else
             {
                 var surplusPv = pv - load;
-                charge = Math.Min(Math.Min(maxChargePower, totalBatteryCapacity - soc), surplusPv);
-                if (charge > 0)
+                pvCharge = Math.Min(Math.Min(maxChargePower, totalBatteryCapacity - soc), surplusPv);
+                charge = pvCharge;
+                if (pvCharge > 0)
                 {
-                    soc += charge;
+                    soc += pvCharge;
                     actions.Add("ładowanie z PV");
                 }
 
-                export = Math.Max(0, surplusPv - charge);
+                export = Math.Max(0, surplusPv - pvCharge);
                 if (export > 0)
                 {
                     actions.Add("oddanie nadwyżki do sieci");
@@ -331,6 +367,7 @@ public sealed class SimulationService(PolishCalendarService calendarService)
 
                 if (extraCharge > 0)
                 {
+                    gridCharge = extraCharge;
                     charge += extraCharge;
                     gridImport += extraCharge;
                     soc += extraCharge;
@@ -341,6 +378,23 @@ public sealed class SimulationService(PolishCalendarService calendarService)
             var optimizedCost = (gridImport * price.EffectiveBuyPricePlnPerMWh)
                 - (export * price.SellPricePlnPerMWh)
                 + (unserved * UnservedPenaltyPlnPerMWh);
+
+            var decisionReason = BuildDecisionReason(
+                price,
+                load,
+                pv,
+                scenario.GridImportLimitMw,
+                totalBatteryCapacity,
+                minimumSoc,
+                startingSoc,
+                soc,
+                targetSoc,
+                pvCharge,
+                gridCharge,
+                discharge,
+                export,
+                gridImport,
+                unserved);
 
             var chargePerBattery = charge / scenario.BatteryCount;
             var dischargePerBattery = discharge / scenario.BatteryCount;
@@ -364,6 +418,7 @@ public sealed class SimulationService(PolishCalendarService calendarService)
                 OptimizedCostPln: Math.Round(optimizedCost, 2),
                 DeltaPln: Math.Round(baselineCost - optimizedCost, 2),
                 Action: actions.Count > 0 ? string.Join(", ", actions.Distinct()) : "bez działania",
+                DecisionReason: decisionReason,
                 CheapHour: price.CheapHour,
                 ExpensiveHour: price.ExpensiveHour,
                 GridLimitHit: gridImport >= scenario.GridImportLimitMw - 0.0001 || unserved > 0,
@@ -402,6 +457,101 @@ public sealed class SimulationService(PolishCalendarService calendarService)
             GridLimitHours: hours.Count(hour => hour.GridLimitHit),
             WarningHours: warningHours,
             Note: note);
+    }
+
+    private static IReadOnlyList<string> BuildAssumptions(bool usesProfileData)
+    {
+        if (usesProfileData)
+        {
+            return
+            [
+                "Symulacja pracuje na profilu RDN 1h. Profil cenowy jest demonstracyjny, ale zachowuje logike godzin tanich i drogich.",
+                "Profil zuzycia i historia pochodza z zalaczonych raportow XLSX. Dla dat spoza roku pomiarowego wybierany jest odpowiadajacy dzien kalendarzowy z profilu.",
+                "Parametr aktualnego poboru sluzy jako korekta skali dla calego profilu godzinowego w wybranym dniu.",
+                "Maksymalna moc ladowania i rozladowania jednego magazynu wynosi 25% jego pojemnosci na godzine."
+            ];
+        }
+
+        return
+        [
+            "Symulacja pracuje na profilu RDN 1h. Profil cenowy jest demonstracyjny, ale zachowuje logike godzin tanich i drogich.",
+            "Jesli brak plikow XLSX, historia zuzycia z ostatnich 7 dni jest budowana syntetycznie tylko na potrzeby demonstracji.",
+            "Maksymalna moc ladowania i rozladowania jednego magazynu wynosi 25% jego pojemnosci na godzine.",
+            "Minimalne rozladowanie magazynu jest ustawiane parametrem `MinimumSocPercent`."
+        ];
+    }
+
+    private static string BuildDecisionReason(
+        PriceProfileHour price,
+        double load,
+        double pv,
+        double gridImportLimit,
+        double totalBatteryCapacity,
+        double minimumSoc,
+        double startingSoc,
+        double endingSoc,
+        double targetSoc,
+        double pvCharge,
+        double gridCharge,
+        double discharge,
+        double export,
+        double gridImport,
+        double unserved)
+    {
+        const double Epsilon = 0.0001;
+        var netDemand = Math.Max(0, load - pv);
+
+        if (unserved > Epsilon)
+        {
+            return "Po wykorzystaniu PV, magazynu i limitu przylacza nadal brakuje mocy, wiec czesc zapotrzebowania pozostaje niepokryta.";
+        }
+
+        if (discharge > Epsilon && price.ExpensiveHour)
+        {
+            return "To droga godzina, dlatego system korzysta z energii w magazynie, aby ograniczyc zakup z sieci.";
+        }
+
+        if (discharge > Epsilon)
+        {
+            return "Zuzycie po PV zbliza sie do limitu przylacza, dlatego magazyn scina import z sieci.";
+        }
+
+        if (gridCharge > Epsilon)
+        {
+            return "To tania godzina, a magazyn trzeba przygotowac na drozszy okres, dlatego system doladowuje go z sieci.";
+        }
+
+        if (pvCharge > Epsilon && export > Epsilon)
+        {
+            return "PV daje nadwyzke. Magazyn laduje sie do bezpiecznego poziomu, a reszta energii trafia do sieci.";
+        }
+
+        if (pvCharge > Epsilon)
+        {
+            return "PV pokrywa obiekt i zostawia nadwyzke, dlatego system laduje magazyn zamiast kupowac energie z sieci.";
+        }
+
+        if (export > Epsilon)
+        {
+            return "PV przekracza chwilowe zuzycie, a magazyn jest juz pelny lub ma wystarczajacy zapas, wiec nadwyzka trafia do sieci.";
+        }
+
+        if (netDemand > Epsilon && startingSoc <= minimumSoc + Epsilon)
+        {
+            return "Magazyn jest przy minimalnym SOC, dlatego system zostawia rezerwe i pokrywa zapotrzebowanie z sieci.";
+        }
+
+        if (netDemand > Epsilon && price.CheapHour && endingSoc >= Math.Min(totalBatteryCapacity, targetSoc) - Epsilon)
+        {
+            return "To tania godzina, ale magazyn ma juz zapas potrzebny na kolejne godziny, wiec dodatkowe ladowanie nie jest potrzebne.";
+        }
+
+        if (netDemand > Epsilon && gridImport >= Math.Min(netDemand, gridImportLimit) - Epsilon)
+        {
+            return "Po uwzglednieniu PV zakup z sieci jest tutaj wystarczajacy, bo ta godzina nie wymaga dodatkowej pracy magazynu.";
+        }
+
+        return "Bilans energii jest stabilny, dlatego system utrzymuje biezacy stan bez dodatkowej reakcji.";
     }
 
     private static double ComputeTargetSoc(

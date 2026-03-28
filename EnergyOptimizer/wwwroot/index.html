@@ -27,8 +27,8 @@
         </label>
 
         <label class="field">
-          <span>Aktualne zuzycie [MW]</span>
-          <input id="currentLoadMw" type="number" min="0.10" max="2.00" step="0.01">
+          <span>Aktualny pobor [MW]</span>
+          <input id="currentLoadMw" type="number" min="0.01" max="2.00" step="0.01">
         </label>
 
         <label class="field">
@@ -86,11 +86,13 @@
               <h2>Symulacja live na danych testowych</h2>
               <p class="live-description">
                 Odtwarzanie jednej doby krok po kroku. W kazdej chwili widac aktualne ceny, wejscia i decyzje systemu.
+                Auto-przewijanie mozna wstrzymac i przechodzic po godzinach recznie.
               </p>
             </div>
             <div class="live-controls">
-              <button id="playPauseBtn" type="button">Pauza</button>
+              <button id="playPauseBtn" type="button">Wstrzymaj auto</button>
               <button id="resetBtn" type="button">Start doby</button>
+              <button id="prevHourBtn" type="button">Poprzednia godzina</button>
               <button id="stepBtn" type="button">Nastepna godzina</button>
               <label class="speed-field">
                 <span>Tempo</span>
@@ -106,6 +108,14 @@
           <div id="liveStatus" class="live-status"></div>
           <div id="liveCards" class="live-cards"></div>
           <div id="timeline" class="timeline"></div>
+        </section>
+
+        <section class="panel compact">
+          <h2>Import energii z przylacza w kolejnych godzinach</h2>
+          <p class="chart-description">
+            Wykres jest zsynchronizowany z trybem live. Niebieski slupek pokazuje import z sieci, a czerwona linia pokazuje pobor obiektu.
+          </p>
+          <div id="gridImportChart" class="import-chart"></div>
         </section>
 
         <section class="panel compact">

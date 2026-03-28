@@ -3,6 +3,7 @@ using EnergyOptimizer;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddSingleton<PolishCalendarService>();
+builder.Services.AddSingleton<ConsumptionProfileService>();
 builder.Services.AddSingleton<SimulationService>();
 
 var app = builder.Build();

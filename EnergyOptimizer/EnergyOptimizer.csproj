@@ -5,4 +5,11 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>EnergyOptimizer</RootNamespace>
   </PropertyGroup>
+
+  <ItemGroup>
+    <Content Include="Data\Profiles\*.xlsx">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+  </ItemGroup>
 </Project>
