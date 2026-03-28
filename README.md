@@ -1,54 +1,100 @@
-# EnergyOptimizer – Makieta algorytmu sterowania energią
+# Energy Optimizer
 
-Aplikacja webowa .NET 10 (Minimal API) prezentująca heurystyczny algorytm sterowania mocą generatora hybrydowego (PV + gaz) z magazynem energii.
+Prosta aplikacja webowa `.NET 10`, która pokazuje dobową symulację sterowania magazynem energii dla układu:
 
-## Architektura systemu
+- `sieć`
+- `PV`
+- `magazyn energii`
 
-- **PV**: 0.5 MW
-- **Generator gazowy**: 0–0.5 MW (sterowany)
-- **Magazyn energii**: 3 MWh, η=80%, SOC_min=20%
-- **Ceny referencyjne**: TGE RDN (~450–900 zł/MWh EE, ~280–380 zł/MWh gaz)
+W aplikacji jest też tryb `live`, który odtwarza kolejne godziny doby na danych testowych i pokazuje:
 
-## Parametry algorytmu
+- zmieniające się ceny
+- zmieniające się parametry wejściowe w danej godzinie
+- aktualną decyzję systemu
+- aktywną godzinę w harmonogramie 24h
 
-| Param | Opis | Zakres |
-|-------|------|--------|
-| p1 | Dostępna pojemność magazynu [MWh] | 0–3 |
-| p2 | Aktualna moc odbiorów [MW] | 0–1 |
-| p3 | Prognozowana moc odbiorów [MW] | 0–1 |
-| p4 | Przewidywana cena EE [zł/MWh] | 300–1000 |
+## Cel
 
-## Wymagania
+Aplikacja ma w prosty sposób pokazać, jak dane wejściowe wpływają na decyzję algorytmu:
 
-- [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
-- Przeglądarka z obsługą JavaScript
+1. ceny `RDN 1h`
+2. kalendarz `dzień roboczy / weekend / święto`
+3. historyczne dane zużycia z ostatnich `7 dni`
+4. aktualne zużycie obiektu
+5. początkową energię w magazynie
+6. liczbę magazynów
+7. pojemność magazynów
+8. pogodę wpływającą na produkcję `PV`
+
+## Co liczy algorytm
+
+Dla każdej godziny doby symulacja wyznacza:
+
+- prognozę zużycia
+- prognozę produkcji z `PV`
+- import energii z sieci
+- ładowanie magazynu
+- rozładowanie magazynu
+- oddanie energii do sieci
+- koszt godzinowy i koszt dobowy
+
+Koszt dobowy uwzględnia:
+
+- cenę zakupu energii
+- cenę sprzedaży energii do sieci
+- opłatę dystrybucyjną
+
+## Ograniczenia w modelu
+
+- maksymalny pobór z przyłącza
+- maksymalna moc `PV`
+- minimalny poziom naładowania magazynu
+- maksymalne ładowanie i rozładowanie magazynu
+- równomierny podział ładowania i rozładowania między magazyny
+
+## Najważniejsze uproszczenia
+
+- ceny `RDN 1h` są profilem demonstracyjnym
+- historia tygodniowa jest syntetyczna
+- maksymalna moc ładowania i rozładowania jednego magazynu to `25%` jego pojemności na godzinę
+- symulacja nie używa generatora gazowego, bo ta wersja ma pokazać prosty wariant spełniający wskazane wymagania
+
+## Endpointy
+
+- `GET /api/demo/defaults`
+- `POST /api/demo/simulate`
 
 ## Uruchomienie
 
-```bash
-git clone https://github.com/pantig/adaptive_control.git
-cd adaptive_control/EnergyOptimizer
-dotnet run
+```powershell
+dotnet build adaptive_control.sln
+dotnet run --project EnergyOptimizer/EnergyOptimizer.csproj
 ```
 
-Aplikacja uruchamia się na `http://localhost:5000`.
+## Uruchomienie w Docker
 
-## Budowanie i publikacja
-
-```bash
-dotnet publish -c Release -o ./publish
-./publish/EnergyOptimizer
+```powershell
+docker compose up --build
 ```
 
-## Endpointy API
+Aplikacja będzie dostępna pod adresem `http://localhost:8080`.
 
-- `GET /api/algorytm?p1=2&p2=0.6&p3=0.7&p4=800` → wynik sterowania
-- `GET /api/ceny?godz=12` → ceny TGE dla danej godziny
+Możesz też zbudować i uruchomić obraz ręcznie:
 
-## Logika heurystyki
+```powershell
+docker build -t energy-optimizer .
+docker run --rm -p 8080:8080 energy-optimizer
+```
 
-1. PV (0.5 MW) traktowane jako baza – zawsze dostępne
-2. Deficyt = max(p2, p3) – P_pv
-3. Jeśli p4 > cena_gaz × 1.2 → uruchom gaz + ładuj magazyn
-4. Jeśli SOC < 20% → zawsze ładuj magazyn przez gaz
-5. W przeciwnym razie → minimalny gaz (tylko deficyt)
+## Weryfikacja
+
+Sprawdzone lokalnie:
+
+- `dotnet build adaptive_control.sln`
+- `node --check EnergyOptimizer/wwwroot/app.js`
+- `GET /`
+- `GET /api/demo/defaults`
+- `GET /app.js`
+- `GET /styles.css`
+
+Środowisko robocze nie miało dostępnego polecenia `docker`, więc pliki kontenerowe zostały przygotowane, ale sam `docker build` i `docker compose up` nie mogły zostać uruchomione tutaj.

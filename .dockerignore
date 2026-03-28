@@ -1,0 +1,10 @@
+.git
+.gitignore
+.dotnet
+.vs
+**/bin
+**/obj
+**/*.user
+**/*.suo
+**/*.log
+

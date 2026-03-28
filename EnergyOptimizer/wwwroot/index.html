@@ -3,56 +3,173 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Energy Optimizer</title>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: 'Segoe UI', sans-serif; background: #0f1117; color: #e0e0e0; padding: 24px; }
-    h1 { font-size: 1.4rem; color: #58a6ff; margin-bottom: 20px; }
-    h2 { font-size: 1rem; color: #aaa; margin-bottom: 12px; }
-    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
-    .card { background: #161b22; border: 1px solid #30363d; border-radius: 10px; padding: 20px; }
-    .slider-group { margin-bottom: 14px; }
-    .slider-group label { display: flex; justify-content: space-between; font-size: 0.85rem; margin-bottom: 4px; color: #8b949e; }
-    .slider-group label span { color: #58a6ff; font-weight: bold; }
-    input[type=range] { width: 100%; accent-color: #58a6ff; }
-    .wynik-box { border-radius: 8px; padding: 14px; margin-top: 8px; font-size: 0.9rem; line-height: 1.8; }
-    .ALARM_SOC            { background: #3d1a1a; border-left: 4px solid #f85149; }
-    .OPTYMALIZACJA_KOSZTOW { background: #1a2d1a; border-left: 4px solid #3fb950; }
-    .TANIA_SIEC           { background: #1a2240; border-left: 4px solid #58a6ff; }
-    .NORMALNY             { background: #1e2228; border-left: 4px solid #888; }
-    .metric { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }
-    .metric-item { background: #0d1117; border-radius: 6px; padding: 8px 12px; font-size: 0.82rem; }
-    .metric-item .val { font-size: 1.1rem; font-weight: bold; color: #58a6ff; }
-    .chart-wrap { position: relative; height: 220px; }
-    .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; margin-left: 8px; background: #21262d; }
-  </style>
+  <title>Prosta Symulacja Magazynu Energii</title>
+  <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <h1>⚡ Energy Optimizer – Makieta algorytmu sterowania</h1>
-  <div class="grid">
-    <div>
-      <div class="card">
-        <h2>Parametry wejściowe</h2>
-        <div class="slider-group"><label>P1 – Dostępna pojemność magazynu [MWh] <span id="p1v">2.0</span></label><input type="range" id="p1" min="0" max="3" step="0.05" value="2"></div>
-        <div class="slider-group"><label>P2 – Aktualna moc odbiorów [MW] <span id="p2v">0.60</span></label><input type="range" id="p2" min="0" max="1" step="0.01" value="0.6"></div>
-        <div class="slider-group"><label>P3 – Prognozowana moc odbiorów [MW] <span id="p3v">0.70</span></label><input type="range" id="p3" min="0" max="1" step="0.01" value="0.7"></div>
-        <div class="slider-group"><label>P4 – Prognozowana cena EE [zł/MWh] <span id="p4v">800</span></label><input type="range" id="p4" min="300" max="1000" step="10" value="800"></div>
-        <div class="slider-group"><label>Godzina <span id="gv">12</span></label><input type="range" id="godz" min="1" max="24" step="1" value="12"></div>
-        <div id="wynik"></div>
-      </div>
-    </div>
-    <div>
-      <div class="card">
-        <h2>Symulacja cen TGE RDN – 24h</h2>
-        <div class="chart-wrap"><canvas id="chartCeny"></canvas></div>
-      </div>
-      <div class="card" style="margin-top:20px">
-        <h2>Prognoza bilansu energetycznego – 24h</h2>
-        <div class="chart-wrap"><canvas id="chartBilans"></canvas></div>
-      </div>
+  <div class="page">
+    <header class="page-header">
+      <h1>Prosta symulacja sterowania magazynem energii</h1>
+      <p>
+        Symulacja pokazuje dobowy plan pracy dla ukladu <strong>siec + PV + magazyn</strong>.
+        Dane wejsciowe sa proste: ceny RDN 1h, kalendarz, historia z zeszlego tygodnia, aktualne zuzycie,
+        pojemnosc magazynow i prognoza PV wynikajaca z pogody.
+      </p>
+    </header>
+
+    <div class="layout">
+      <aside class="panel controls">
+        <h2>Parametry</h2>
+
+        <label class="field">
+          <span>Data planowania</span>
+          <input id="scenarioDate" type="date">
+        </label>
+
+        <label class="field">
+          <span>Aktualne zuzycie [MW]</span>
+          <input id="currentLoadMw" type="number" min="0.10" max="2.00" step="0.01">
+        </label>
+
+        <label class="field">
+          <span>Poczatkowa energia w magazynie [MWh]</span>
+          <input id="initialStoredEnergyMWh" type="number" min="0.10" max="20.00" step="0.05">
+        </label>
+
+        <label class="field">
+          <span>Liczba magazynow</span>
+          <input id="batteryCount" type="number" min="1" max="12" step="1">
+        </label>
+
+        <label class="field">
+          <span>Pojemnosc jednego magazynu [MWh]</span>
+          <input id="batteryCapacityMWh" type="number" min="0.25" max="4.00" step="0.05">
+        </label>
+
+        <label class="field">
+          <span>Minimalny SOC [%]</span>
+          <input id="minimumSocPercent" type="number" min="10" max="40" step="1">
+        </label>
+
+        <label class="field">
+          <span>Limit poboru z przylacza [MW]</span>
+          <input id="gridImportLimitMw" type="number" min="0.10" max="2.00" step="0.01">
+        </label>
+
+        <label class="field">
+          <span>Maksymalna moc PV [MW]</span>
+          <input id="pvMaxMw" type="number" min="0.00" max="2.00" step="0.01">
+        </label>
+
+        <label class="field">
+          <span>Zachmurzenie [%]</span>
+          <input id="cloudinessPercent" type="number" min="0" max="100" step="1">
+        </label>
+
+        <label class="field">
+          <span>Oplata dystrybucyjna [PLN/MWh]</span>
+          <input id="distributionFeePlnPerMWh" type="number" min="0" max="300" step="5">
+        </label>
+
+        <label class="field">
+          <span>Cena sprzedazy wzgledem RDN [0-1]</span>
+          <input id="exportPriceFactor" type="number" min="0.20" max="1.00" step="0.05">
+        </label>
+      </aside>
+
+      <main class="content">
+        <section id="summary" class="summary-grid"></section>
+
+        <section class="panel compact live-panel">
+          <div class="live-header">
+            <div>
+              <h2>Symulacja live na danych testowych</h2>
+              <p class="live-description">
+                Odtwarzanie jednej doby krok po kroku. W kazdej chwili widac aktualne ceny, wejscia i decyzje systemu.
+              </p>
+            </div>
+            <div class="live-controls">
+              <button id="playPauseBtn" type="button">Pauza</button>
+              <button id="resetBtn" type="button">Start doby</button>
+              <button id="stepBtn" type="button">Nastepna godzina</button>
+              <label class="speed-field">
+                <span>Tempo</span>
+                <select id="speedSelect">
+                  <option value="1800">wolne</option>
+                  <option value="1000" selected>normalne</option>
+                  <option value="450">szybkie</option>
+                </select>
+              </label>
+            </div>
+          </div>
+
+          <div id="liveStatus" class="live-status"></div>
+          <div id="liveCards" class="live-cards"></div>
+          <div id="timeline" class="timeline"></div>
+        </section>
+
+        <section class="panel compact">
+          <h2>Zalozenia i dane wejsciowe algorytmu</h2>
+          <div id="metaGrid" class="meta-grid"></div>
+        </section>
+
+        <section class="split">
+          <article class="panel compact">
+            <h2>Zasady algorytmu</h2>
+            <ul id="rulesList" class="simple-list"></ul>
+          </article>
+          <article class="panel compact">
+            <h2>Uproszczenia symulacji</h2>
+            <ul id="assumptionsList" class="simple-list"></ul>
+          </article>
+        </section>
+
+        <section class="panel compact">
+          <h2>Historia zuzycia z zeszlego tygodnia</h2>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Dzien</th>
+                  <th>Typ dnia</th>
+                  <th>Srednie zuzycie [MW]</th>
+                  <th>Maksymalne zuzycie [MW]</th>
+                </tr>
+              </thead>
+              <tbody id="historyBody"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel compact">
+          <h2>Dobowa symulacja godzinowa</h2>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Godzina</th>
+                  <th>RDN</th>
+                  <th>Zakup z dystrybucja</th>
+                  <th>Sprzedaz</th>
+                  <th>Prognoza zuzycia</th>
+                  <th>Prognoza PV</th>
+                  <th>Import z sieci</th>
+                  <th>Ladowanie</th>
+                  <th>Rozladowanie</th>
+                  <th>SOC</th>
+                  <th>Koszt opt.</th>
+                  <th>Delta vs brak magazynu</th>
+                  <th>Dzialanie</th>
+                </tr>
+              </thead>
+              <tbody id="hoursBody"></tbody>
+            </table>
+          </div>
+        </section>
+      </main>
     </div>
   </div>
+
   <script src="app.js"></script>
 </body>
 </html>

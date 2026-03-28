@@ -1,116 +1,363 @@
-const labels24 = Array.from({length: 24}, (_, i) => `${i+1}:00`);
+const state = {
+  controller: null,
+  response: null,
+  liveIndex: 0,
+  isPlaying: true,
+  playbackTimer: null
+};
 
-// ---- Wykres cen TGE ----
-const ctxCeny = document.getElementById('chartCeny').getContext('2d');
-const chartCeny = new Chart(ctxCeny, {
-  type: 'line',
-  data: {
-    labels: labels24,
-    datasets: [
-      {label: 'EE [zł/MWh]', data: [], borderColor: '#f0a500', backgroundColor: 'rgba(240,165,0,0.08)', tension: 0.4, fill: true},
-      {label: 'Gaz [zł/MWh]', data: [], borderColor: '#3fb950', backgroundColor: 'rgba(63,185,80,0.08)', tension: 0.4, fill: true}
-    ]
-  },
-  options: {
-    responsive: true, maintainAspectRatio: false,
-    plugins: {legend: {labels: {color: '#aaa'}}},
-    scales: {
-      x: {ticks: {color: '#666'}, grid: {color: '#21262d'}},
-      y: {ticks: {color: '#666'}, grid: {color: '#21262d'}}
-    }
-  }
-});
+const formatters = {
+  currency0: new Intl.NumberFormat("pl-PL", { style: "currency", currency: "PLN", maximumFractionDigits: 0 }),
+  number2: new Intl.NumberFormat("pl-PL", { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+  number3: new Intl.NumberFormat("pl-PL", { minimumFractionDigits: 3, maximumFractionDigits: 3 }),
+  date: new Intl.DateTimeFormat("pl-PL", { day: "2-digit", month: "2-digit", year: "numeric" })
+};
 
-// ---- Wykres bilansu ----
-const ctxBilans = document.getElementById('chartBilans').getContext('2d');
-const chartBilans = new Chart(ctxBilans, {
-  type: 'bar',
-  data: {
-    labels: labels24,
-    datasets: [
-      {label: 'PV [MW]', data: [], backgroundColor: '#f0a500'},
-      {label: 'Gaz [MW]', data: [], backgroundColor: '#f85149'},
-      {label: 'Sieć [MW]', data: [], backgroundColor: '#58a6ff'},
-      {label: 'Ładowanie magazynu [MW]', data: [], backgroundColor: '#3fb950', stack: 'load'}
-    ]
-  },
-  options: {
-    responsive: true, maintainAspectRatio: false,
-    plugins: {legend: {labels: {color: '#aaa'}}},
-    scales: {
-      x: {stacked: true, ticks: {color: '#666'}, grid: {color: '#21262d'}},
-      y: {stacked: true, ticks: {color: '#666'}, grid: {color: '#21262d'}}
-    }
-  }
-});
-
-async function inicjalizuj() {
-  const res = await fetch(`/api/ceny?godz=12`);
-  const data = await res.json();
-  chartCeny.data.datasets[0].data = data.WszystkieEE;
-  chartCeny.data.datasets[1].data = data.WszystkieGaz;
-  chartCeny.update();
-
-  // Symulacja bilansu na 24h
-  const pvProfil = [0,0,0,0,0,0.05,0.1,0.2,0.35,0.45,0.5,0.5,0.48,0.45,0.4,0.3,0.2,0.1,0.05,0,0,0,0,0];
-  const zapotrzebowanie = [0.4,0.35,0.3,0.3,0.35,0.5,0.6,0.7,0.75,0.8,0.8,0.75,0.7,0.65,0.7,0.75,0.8,0.85,0.9,0.85,0.8,0.7,0.6,0.5];
-
-  const pvData=[], gazData=[], siecData=[], ladData=[];
-  for (let i = 0; i < 24; i++) {
-    const pv = pvProfil[i];
-    const demand = zapotrzebowanie[i];
-    const ee = data.WszystkieEE[i];
-    const gaz_ref = data.WszystkieGaz[i];
-    const deficit = Math.max(0, demand - pv);
-    const gas = ee > gaz_ref * 1.2 ? Math.min(0.5, deficit + 0.2) : deficit;
-    const siec = Math.max(0, demand - pv - gas);
-    const lad = Math.max(0, pv + gas - demand);
-    pvData.push(pv.toFixed(2));
-    gazData.push(Math.min(gas, 0.5).toFixed(2));
-    siecData.push(siec.toFixed(2));
-    ladData.push(lad.toFixed(2));
-  }
-  chartBilans.data.datasets[0].data = pvData;
-  chartBilans.data.datasets[1].data = gazData;
-  chartBilans.data.datasets[2].data = siecData;
-  chartBilans.data.datasets[3].data = ladData;
-  chartBilans.update();
+function $(id) {
+  return document.getElementById(id);
 }
 
-async function update() {
-  const p1 = +document.getElementById('p1').value;
-  const p2 = +document.getElementById('p2').value;
-  const p3 = +document.getElementById('p3').value;
-  const p4 = +document.getElementById('p4').value;
-  const godz = +document.getElementById('godz').value;
-
-  document.getElementById('p1v').textContent = p1.toFixed(2);
-  document.getElementById('p2v').textContent = p2.toFixed(2);
-  document.getElementById('p3v').textContent = p3.toFixed(2);
-  document.getElementById('p4v').textContent = p4;
-  document.getElementById('gv').textContent = godz;
-
-  const res = await fetch(`/api/algorytm?p1=${p1}&p2=${p2}&p3=${p3}&p4=${p4}&godzina=${godz}`);
-  const d = await res.json();
-
-  // Wskaźnik SOC
-  const socPct = Math.round((1 - d.p_magazyn / 3) * 100);
-
-  document.getElementById('wynik').innerHTML = `
-    <div class="wynik-box ${d.tryb}">
-      <strong>${d.zalecenie}</strong>
-    </div>
-    <div class="metric">
-      <div class="metric-item"><div class="val">${d.p_gas.toFixed(2)} MW</div>Generator gazowy</div>
-      <div class="metric-item"><div class="val">${d.p_pv.toFixed(2)} MW</div>PV</div>
-      <div class="metric-item"><div class="val">${d.p_siec.toFixed(2)} MW</div>Pobór z sieci</div>
-      <div class="metric-item"><div class="val">${d.koszt.toFixed(0)} zł/h</div>Koszt godzinowy</div>
-      <div class="metric-item"><div class="val">${d.soc_po.toFixed(2)} MWh</div>SOC po godzinie</div>
-      <div class="metric-item"><div class="val">${d.tryb}</div>Tryb pracy</div>
-    </div>
-  `;
+function setLoading(isLoading) {
+  document.body.dataset.loading = isLoading ? "true" : "false";
 }
 
-document.querySelectorAll('input[type=range]').forEach(el => el.addEventListener('input', update));
-inicjalizuj();
-update();
+function applyScenario(scenario) {
+  Object.entries(scenario).forEach(([key, value]) => {
+    const element = $(key);
+    if (element) {
+      element.value = value;
+    }
+  });
+}
+
+function buildRequest() {
+  return {
+    scenarioDate: $("scenarioDate").value,
+    currentLoadMw: Number($("currentLoadMw").value),
+    initialStoredEnergyMWh: Number($("initialStoredEnergyMWh").value),
+    batteryCount: Number($("batteryCount").value),
+    batteryCapacityMWh: Number($("batteryCapacityMWh").value),
+    minimumSocPercent: Number($("minimumSocPercent").value),
+    gridImportLimitMw: Number($("gridImportLimitMw").value),
+    pvMaxMw: Number($("pvMaxMw").value),
+    cloudinessPercent: Number($("cloudinessPercent").value),
+    distributionFeePlnPerMWh: Number($("distributionFeePlnPerMWh").value),
+    exportPriceFactor: Number($("exportPriceFactor").value)
+  };
+}
+
+async function fetchJson(url, options = {}) {
+  const response = await fetch(url, options);
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`);
+  }
+
+  return response.json();
+}
+
+async function loadDefaults() {
+  setLoading(true);
+  try {
+    const response = await fetchJson("/api/demo/defaults");
+    applyScenario(response.scenario);
+    renderResponse(response);
+  } finally {
+    setLoading(false);
+  }
+}
+
+async function runSimulation() {
+  stopPlayback(false);
+
+  if (state.controller) {
+    state.controller.abort();
+  }
+
+  state.controller = new AbortController();
+  setLoading(true);
+
+  try {
+    const response = await fetchJson("/api/demo/simulate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(buildRequest()),
+      signal: state.controller.signal
+    });
+
+    renderResponse(response);
+  } catch (error) {
+    if (error.name !== "AbortError") {
+      $("summary").innerHTML = `
+        <article class="panel summary-card">
+          <p class="summary-label">Blad</p>
+          <p class="summary-value">Brak danych</p>
+          <p class="summary-note">${error.message}</p>
+        </article>`;
+    }
+  } finally {
+    setLoading(false);
+  }
+}
+
+function renderResponse(response) {
+  state.response = response;
+  state.liveIndex = 0;
+
+  renderSummary(response);
+  renderMeta(response);
+  renderList("rulesList", response.rules);
+  renderList("assumptionsList", response.assumptions);
+  renderHistory(response.history);
+  renderHours(response.hours);
+  updatePlayPauseButton();
+  renderLiveView();
+  startPlayback();
+}
+
+function renderSummary(response) {
+  const { summary } = response;
+  $("summary").innerHTML = [
+    summaryCard("Koszt dobowy optymalizowany", formatters.currency0.format(summary.optimizedCostPln), summary.note),
+    summaryCard("Koszt bez magazynu", formatters.currency0.format(summary.baselineCostPln), "Punkt odniesienia dla tej samej prognozy i cen."),
+    summaryCard("Oszczednosc", formatters.currency0.format(summary.savingsPln), `${formatters.number2.format(summary.savingsPercent)}% wzgledem wariantu bez pracy magazynu.`),
+    summaryCard("Koncowy SOC", `${formatters.number2.format(summary.finalSocMWh)} MWh`, `Ladowanie: ${formatters.number2.format(summary.totalChargedEnergyMWh)} MWh, rozladowanie: ${formatters.number2.format(summary.totalDischargedEnergyMWh)} MWh.`),
+    summaryCard("Ostrzezenia", `${summary.warningHours} h`, `Godziny z limitem przylacza: ${summary.gridLimitHours}, pik importu: ${formatters.number2.format(summary.peakGridImportMw)} MW.`)
+  ].join("");
+}
+
+function summaryCard(label, value, note) {
+  return `
+    <article class="panel summary-card">
+      <p class="summary-label">${label}</p>
+      <p class="summary-value">${value}</p>
+      <p class="summary-note">${note}</p>
+    </article>`;
+}
+
+function renderMeta(response) {
+  const { scenario, calendar, inputs } = response;
+  const items = [
+    ["Kalendarz", `${formatDate(calendar.date)}<br>${calendar.label}`],
+    ["Magazyny", `${scenario.batteryCount} x ${formatters.number2.format(scenario.batteryCapacityMWh)} MWh<br>lacznie ${formatters.number2.format(inputs.totalBatteryCapacityMWh)} MWh`],
+    ["Ograniczenia", `Min. SOC: ${formatters.number2.format(inputs.minimumSocMWh)} MWh<br>Limit przylacza: ${formatters.number2.format(scenario.gridImportLimitMw)} MW`],
+    ["Moc magazynu", `Ladowanie max: ${formatters.number2.format(inputs.maxChargePowerMw)} MW<br>Rozladowanie max: ${formatters.number2.format(inputs.maxDischargePowerMw)} MW`],
+    ["Ceny", `RDN srednio: ${formatters.number2.format(inputs.averageRdnPricePlnPerMWh)} PLN/MWh<br>Zakup z dystrybucja: ${formatters.number2.format(inputs.averageEffectiveBuyPricePlnPerMWh)} PLN/MWh`],
+    ["Sprzedaz", `Srednia cena oddania: ${formatters.number2.format(inputs.averageSellPricePlnPerMWh)} PLN/MWh<br>Wspolczynnik sprzedazy: ${formatters.number2.format(scenario.exportPriceFactor)}`],
+    ["Zrodlo cen", inputs.priceSource],
+    ["Historia", inputs.historySource]
+  ];
+
+  $("metaGrid").innerHTML = items.map(([title, value]) => `
+    <div class="meta-item">
+      <strong>${title}</strong>
+      <span>${value}</span>
+    </div>`).join("");
+}
+
+function renderList(id, items) {
+  $(id).innerHTML = items.map(item => `<li>${item}</li>`).join("");
+}
+
+function renderHistory(history) {
+  $("historyBody").innerHTML = history.map(day => `
+    <tr>
+      <td>${formatDate(day.date)}</td>
+      <td>${day.dayType}</td>
+      <td>${formatters.number3.format(day.averageLoadMw)}</td>
+      <td>${formatters.number3.format(day.peakLoadMw)}</td>
+    </tr>`).join("");
+}
+
+function renderHours(hours) {
+  $("hoursBody").innerHTML = hours.map((hour, index) => {
+    const rowClasses = [
+      hour.unservedMw > 0 ? "warning" : "",
+      hour.expensiveHour ? "expensive" : "",
+      hour.cheapHour ? "cheap" : ""
+    ].join(" ");
+
+    return `
+      <tr class="${rowClasses}" data-hour-index="${index}">
+        <td>${hour.label}</td>
+        <td>${formatters.number2.format(hour.rdnPricePlnPerMWh)}</td>
+        <td>${formatters.number2.format(hour.effectiveBuyPricePlnPerMWh)}</td>
+        <td>${formatters.number2.format(hour.sellPricePlnPerMWh)}</td>
+        <td>${formatters.number3.format(hour.forecastLoadMw)}</td>
+        <td>${formatters.number3.format(hour.forecastPvMw)}</td>
+        <td>${formatters.number3.format(hour.gridImportMw)}</td>
+        <td>${formatters.number3.format(hour.batteryChargeMw)}</td>
+        <td>${formatters.number3.format(hour.batteryDischargeMw)}</td>
+        <td>${formatters.number3.format(hour.socMWh)}</td>
+        <td>${formatters.currency0.format(hour.optimizedCostPln)}</td>
+        <td class="${hour.deltaPln >= 0 ? "delta-positive" : "delta-negative"}">${formatters.currency0.format(hour.deltaPln)}</td>
+        <td>${hour.action}</td>
+      </tr>`;
+  }).join("");
+}
+
+function renderLiveView() {
+  if (!state.response || !state.response.hours.length) {
+    return;
+  }
+
+  const hour = state.response.hours[state.liveIndex];
+  const netDemand = Math.max(0, hour.forecastLoadMw - hour.forecastPvMw);
+  const deltaClass = hour.deltaPln >= 0 ? "delta-positive" : "delta-negative";
+
+  $("liveStatus").innerHTML = `
+    <div class="live-status-card">
+      <strong>Symulowany czas</strong>
+      <div class="live-clock">${hour.label}</div>
+      <div class="summary-note">${formatDate(state.response.calendar.date)}</div>
+    </div>
+    <div class="live-decision">
+      <strong>Decyzja systemu</strong>
+      <div class="badge-row">
+        ${hour.cheapHour ? '<span class="badge price-cheap">tania godzina</span>' : ""}
+        ${hour.expensiveHour ? '<span class="badge price-expensive">droga godzina</span>' : ""}
+        ${hour.unservedMw > 0 ? '<span class="badge warning">uwaga: brak mocy</span>' : ""}
+      </div>
+      <p>${hour.action}</p>
+    </div>`;
+
+  const liveCards = [
+    ["Cena zakupu", `${formatters.number2.format(hour.effectiveBuyPricePlnPerMWh)} PLN/MWh`, `RDN: ${formatters.number2.format(hour.rdnPricePlnPerMWh)} PLN/MWh`],
+    ["Cena sprzedazy", `${formatters.number2.format(hour.sellPricePlnPerMWh)} PLN/MWh`, "Cena przy oddawaniu energii do sieci"],
+    ["Zuzycie obiektu", `${formatters.number3.format(hour.forecastLoadMw)} MW`, `Po PV zostaje ${formatters.number3.format(netDemand)} MW`],
+    ["Produkcja PV", `${formatters.number3.format(hour.forecastPvMw)} MW`, "Prognoza wynikajaca z pogody i pory dnia"],
+    ["Praca magazynu", `${formatters.number3.format(hour.batteryChargeMw - hour.batteryDischargeMw)} MW`, `Na magazyn: +${formatters.number3.format(hour.batteryChargeMw)} / -${formatters.number3.format(hour.batteryDischargeMw)} MW`],
+    ["SOC", `${formatters.number3.format(hour.socMWh)} MWh`, `Na 1 magazyn: +${formatters.number3.format(hour.chargePerBatteryMw)} / -${formatters.number3.format(hour.dischargePerBatteryMw)} MW`],
+    ["Import z sieci", `${formatters.number3.format(hour.gridImportMw)} MW`, hour.gridLimitHit ? "Praca przy limicie przylacza" : "Import miesci sie w limicie"],
+    ["Wynik godziny", `<span class="${deltaClass}">${formatters.currency0.format(hour.deltaPln)}</span>`, `Koszt tej godziny: ${formatters.currency0.format(hour.optimizedCostPln)}`]
+  ];
+
+  $("liveCards").innerHTML = liveCards.map(([label, value, note]) => `
+    <div class="live-card">
+      <p class="live-card-label">${label}</p>
+      <p class="live-card-value">${value}</p>
+      <p class="live-card-note">${note}</p>
+    </div>`).join("");
+
+  $("timeline").innerHTML = state.response.hours.map((item, index) => `
+    <div class="timeline-item ${item.cheapHour ? "timeline-item-cheap" : ""} ${item.expensiveHour ? "timeline-item-expensive" : ""} ${index === state.liveIndex ? "timeline-item-active" : ""}">
+      <div class="timeline-hour">${item.label}</div>
+      <div class="timeline-price">${formatters.number2.format(item.effectiveBuyPricePlnPerMWh)}</div>
+    </div>`).join("");
+
+  updateLiveRowHighlight();
+}
+
+function updateLiveRowHighlight() {
+  document.querySelectorAll("#hoursBody tr").forEach(row => {
+    row.classList.toggle("active-hour", Number(row.dataset.hourIndex) === state.liveIndex);
+  });
+}
+
+function startPlayback() {
+  if (!state.response || !state.response.hours.length) {
+    return;
+  }
+
+  clearPlaybackTimer();
+  state.isPlaying = true;
+  updatePlayPauseButton();
+  scheduleNextTick();
+}
+
+function stopPlayback(updateButton = true) {
+  clearPlaybackTimer();
+  state.isPlaying = false;
+  if (updateButton) {
+    updatePlayPauseButton();
+  }
+}
+
+function clearPlaybackTimer() {
+  if (state.playbackTimer) {
+    clearTimeout(state.playbackTimer);
+    state.playbackTimer = null;
+  }
+}
+
+function scheduleNextTick() {
+  clearPlaybackTimer();
+  if (!state.isPlaying || !state.response) {
+    return;
+  }
+
+  state.playbackTimer = setTimeout(() => {
+    stepLiveHour(true);
+  }, getPlaybackSpeed());
+}
+
+function stepLiveHour(continuePlaying) {
+  if (!state.response || !state.response.hours.length) {
+    return;
+  }
+
+  state.liveIndex = (state.liveIndex + 1) % state.response.hours.length;
+  renderLiveView();
+
+  if (continuePlaying && state.isPlaying) {
+    scheduleNextTick();
+  }
+}
+
+function resetLiveHour() {
+  state.liveIndex = 0;
+  renderLiveView();
+  if (state.isPlaying) {
+    scheduleNextTick();
+  }
+}
+
+function getPlaybackSpeed() {
+  return Number($("speedSelect").value || 1000);
+}
+
+function updatePlayPauseButton() {
+  $("playPauseBtn").textContent = state.isPlaying ? "Pauza" : "Start";
+}
+
+function formatDate(value) {
+  return formatters.date.format(new Date(`${value}T00:00:00`));
+}
+
+function scheduleSimulation() {
+  clearTimeout(scheduleSimulation.timer);
+  scheduleSimulation.timer = setTimeout(runSimulation, 250);
+}
+
+function bindEvents() {
+  document.querySelectorAll("input").forEach(input => {
+    input.addEventListener("input", scheduleSimulation);
+    input.addEventListener("change", scheduleSimulation);
+  });
+
+  $("playPauseBtn").addEventListener("click", () => {
+    if (state.isPlaying) {
+      stopPlayback();
+    } else {
+      startPlayback();
+    }
+  });
+
+  $("resetBtn").addEventListener("click", () => {
+    clearPlaybackTimer();
+    resetLiveHour();
+  });
+
+  $("stepBtn").addEventListener("click", () => {
+    stopPlayback();
+    stepLiveHour(false);
+  });
+
+  $("speedSelect").addEventListener("change", () => {
+    if (state.isPlaying) {
+      scheduleNextTick();
+    }
+  });
+}
+
+bindEvents();
+loadDefaults();
